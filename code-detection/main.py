@@ -132,64 +132,89 @@ def setup_args():
 
     return parser.parse_args(input_args)
 
-def generate_data(dataset, dataset_key, max_num, min_len, max_len, max_def_num, **kwargs):
-    # 1. Encontrar la raíz real del repositorio de forma dinámica
-    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
-    repo_root = os.path.dirname(script_dir)
-    
-    # 2. ESTRATEGIA RADICAL DE TESIS: Forzar la búsqueda secuencial de tus archivos reales
-    # Intentar buscar primero el archivo generado por tu generate.py
-    path_generado = os.path.join(repo_root, "code-generation", "output", "CodeSearchNet", "outputs", "generated_codes.txt")
-    
-    # Intentar buscar como segunda opción el train.jsonl o test.jsonl de tu streaming
-    path_streaming = os.path.join(repo_root, "data", "CodeSearchNet", "python", f"{dataset_key}.jsonl")
-    
-    # Intentar buscar como tercera opción (por si acaso viene con el nombre raro que tiró el error)
-    path_fallback_estricto = os.path.join(repo_root, "data", "CodeSearchNet", "python", "train.jsonl")
 
-    # Seleccionar el primer archivo real que sí exista en el disco de Colab
-    if os.path.exists(path_generado):
-        path = path_generado
-    elif os.path.exists(path_streaming):
-        path = path_streaming
-    elif os.path.exists(path_fallback_estricto):
-        path = path_fallback_estricto
-    else:
-        # Si de verdad no hay nada, te damos un mensaje de diagnóstico claro
-        raise FileNotFoundError(
-            f"❌ Error crítico de Tesis: No se encontró ningún archivo de datos.\n"
-            f"Buscamos en:\n1. {path_generado}\n2. {path_streaming}\n3. {path_fallback_estricto}\n"
-            f"Por favor, verifica que corriste la celda de streaming primero."
-        )
-        
-    logger.info(f"[Fork Fix Master] Archivo detectado con éxito. Cargando desde: {path}")
-    
-    data = []
-    with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if not line.strip():
+def generate_data(dataset, key, max_num=200, min_len=0, max_len=128, max_comment_num=10, max_def_num=5, cut_def=False, max_todo_num=3):
+
+    path = f'../code-generation/output/{dataset}/{key}/outputs.txt'
+
+    logger.info(f'Loading data from {path}')
+    import json
+    all_originals = []
+    all_samples = []  # machine generated
+
+    max_def_num_count = 0
+    min_len_count = 0
+    max_comment_num_count = 0
+    function_comment_num_count = 0
+    max_todo_num_count = 0
+
+    with open(path, 'r') as f:
+        for line in tqdm(f, ncols=70):
+            line = line.strip()
+            if line == '':
                 continue
-            try:
-                line = json.loads(line)
-                
-                codigo_real = line.get('code', line.get('solution', line.get('output', '')))
-                if not codigo_real:
-                    continue
-                    
-                if 'output' not in line:
-                    line['output'] = codigo_real
-                if 'solution' not in line:
-                    line['solution'] = codigo_real
-                    
-                if line['solution'].count('def') > max_def_num or line['output'].count('def') > max_def_num:
-                    continue
-                    
-                data.append(line)
-                if len(data) >= max_num:
-                    break
-            except Exception:
+            line = json.loads(line)
+
+            # cut out the 'def' part after the first generation
+            if cut_def:
+                line['output'] = line['output'].split('def')[0]
+                line['solution'] = line['solution'].split('def')[0]
+
+            # I don't like there to have too many 'def' in the code
+            # ~100/100000 examples have more than 3 'def'
+            if line['solution'].count('def') > max_def_num or line['output'].count('def') > max_def_num:
+                max_def_num_count += 1
                 continue
-                
+
+            # avoid examples that are too short (less than min_len words)
+            # around 2000/100000 examples have around 55 words
+            if len(line['solution'].split()) < min_len or len(line['output'].split()) < min_len:
+                min_len_count += 1
+                continue
+
+            # if the are too many comments, skip
+            def count_comment(text):
+                return text.count('#')
+
+            if count_comment(line['solution']) > max_comment_num or count_comment(line['output']) > max_comment_num:
+                max_comment_num_count += 1
+                continue
+
+            # if there are too many TODOs, skip
+            def count_todo_comment(text):
+                return text.count('# TODO') + text.count('# todo')
+
+            if count_todo_comment(line['solution']) > max_todo_num or count_todo_comment(line['output']) > max_todo_num:
+                max_todo_num_count += 1
+                continue
+
+            # the number of text.count("'''") and text.count('"""') should be <1
+            if line['solution'].count("'''") > 0 or line['solution'].count('"""') > 0 or line['output'].count("'''") > 0 or line['output'].count('"""') > 0:
+                function_comment_num_count += 1
+                continue
+
+            # cut to 128 tokens
+            all_originals.append(' '.join(line['solution'].split(' ')[:max_len]))
+            all_samples.append(' '.join(line['output'].split(' ')[:max_len]))
+
+    logger.info(f'{max_def_num_count} examples have more than {max_def_num} "def"')
+    logger.info(f'{min_len_count} examples have less than {min_len} words')
+    logger.info(f'{max_comment_num_count} examples have more than {max_comment_num} comments')
+    logger.info(f'{max_todo_num_count} examples have more than {max_todo_num} TODOs')
+    logger.info(f'{function_comment_num_count} examples have more than 1 function comment')
+    logger.info(f'Loaded {len(all_originals)} examples after filtering, and will return {min(max_num, len(all_originals))} examples')
+
+    # statistical analysis
+    # import random
+    # random.seed(42)
+    # random.shuffle(all_originals)
+    # random.shuffle(all_samples)
+
+    data = {
+        "original": all_originals[:max_num],
+        "sampled": all_samples[:max_num]
+    }
+
     return data
 
 
@@ -515,16 +540,6 @@ def main():
 
     data = generate_data(args.dataset, args.dataset_key, max_num=args.n_samples, min_len=args.min_len, max_len=args.max_len,
                          max_comment_num=args.max_comment_num, max_def_num=args.max_def_num, cut_def=args.cut_def, max_todo_num=args.max_todo_num)
-    
-    # [Fork Fix] Imprimir un diagnóstico limpio según nuestra estructura de lista
-    if isinstance(data, list) and len(data) > 0:
-        logger.info(f"Muestras totales cargadas para evaluación: {len(data)}")
-        # Intentamos extraer el texto original usando las claves disponibles de forma segura
-        primer_registro = data[0]
-        texto_original = primer_registro.get("original", primer_registro.get("code", primer_registro.get("output", "")))
-        logger.info(f'Original (Muestra 1): {texto_original[:100]}...') # Mostramos solo los primeros 100 caracteres
-    else:
-        logger.info(f'Original: {data.get("original", [""])[0]}') # Línea fallback del autor
 
     logger.info(f'Original: {data["original"][0]}')
     logger.info(f'Sampled: {data["sampled"][0]}')
