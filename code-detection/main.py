@@ -132,7 +132,7 @@ def setup_args():
 
     return parser.parse_args(input_args)
 
-def generate_data(dataset, dataset_key, max_num, min_len, max_len, max_def_num):
+def generate_data(dataset, dataset_key, max_num, min_len, max_len, max_def_num, **kwargs):
     # 1. Encontrar la raíz real del repositorio de forma dinámica
     script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
     repo_root = os.path.dirname(script_dir)
