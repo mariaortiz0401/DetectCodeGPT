@@ -132,21 +132,26 @@ def setup_args():
 
     return parser.parse_args(input_args)
 
-
-def generate_data(dataset, key, max_num=200, min_len=0, max_len=128, max_comment_num=10, max_def_num=5, cut_def=False, max_todo_num=3):
-
-    path = f'../code-generation/output/{dataset}/{key}/outputs.txt'
-
-    logger.info(f'Loading data from {path}')
-    import json
-    all_originals = []
-    all_samples = []  # machine generated
-
-    max_def_num_count = 0
-    min_len_count = 0
-    max_comment_num_count = 0
-    function_comment_num_count = 0
-    max_todo_num_count = 0
+def generate_data(dataset, dataset_key, max_num, min_len, max_len, max_def_num):
+    # 1. Encontrar la raíz real del repositorio de forma dinámica
+    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
+    repo_root = os.path.dirname(script_dir)
+    
+    # 2. Apuntar a la ruta exacta donde se guardan tus códigos generados
+    # Esto busca en: /content/DetectCodeGPT/code-generation/output/CodeSearchNet/outputs/generated_codes.txt
+    path = os.path.join(repo_root, "code-generation", "output", "CodeSearchNet", "outputs", "generated_codes.txt")
+    
+    # [Bypass de Seguridad] Si por alguna razón no encuentra el txt generado, 
+    # lee directamente el train.jsonl del streaming que creamos antes.
+    if not os.path.exists(path):
+        path = os.path.join(repo_root, "data", "CodeSearchNet", "python", f"{dataset_key}.jsonl")
+        
+    logger.info(f"[Fork Fix] Cargando datos para detección desde: {path}")
+    
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"❌ Error crítico: No se encontró ningún archivo de datos en: {path}")
+        
+    data = []
 
     with open(path, 'r') as f:
         for line in tqdm(f, ncols=70):
