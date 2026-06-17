@@ -515,6 +515,16 @@ def main():
 
     data = generate_data(args.dataset, args.dataset_key, max_num=args.n_samples, min_len=args.min_len, max_len=args.max_len,
                          max_comment_num=args.max_comment_num, max_def_num=args.max_def_num, cut_def=args.cut_def, max_todo_num=args.max_todo_num)
+    
+    # [Fork Fix] Imprimir un diagnóstico limpio según nuestra estructura de lista
+    if isinstance(data, list) and len(data) > 0:
+        logger.info(f"Muestras totales cargadas para evaluación: {len(data)}")
+        # Intentamos extraer el texto original usando las claves disponibles de forma segura
+        primer_registro = data[0]
+        texto_original = primer_registro.get("original", primer_registro.get("code", primer_registro.get("output", "")))
+        logger.info(f'Original (Muestra 1): {texto_original[:100]}...') # Mostramos solo los primeros 100 caracteres
+    else:
+        logger.info(f'Original: {data.get("original", [""])[0]}') # Línea fallback del autor
 
     logger.info(f'Original: {data["original"][0]}')
     logger.info(f'Sampled: {data["sampled"][0]}')
