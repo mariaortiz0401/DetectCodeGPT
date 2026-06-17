@@ -16,7 +16,7 @@ def remove_mask_space(text):
         text = text.replace(match, match.strip())
     return text
 
-def perturb_code_with_t5(text, mask_model, mask_tokenizer, device, n_perturbations=10):
+def perturb_code_with_t5(text, mask_model, mask_tokenizer, device, n_perturbations=15):
     perturbed_texts = []
     prompt = f"Perturb open-source python code maintaining logic: {text}"
     inputs = mask_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
@@ -28,10 +28,15 @@ def perturb_code_with_t5(text, mask_model, mask_tokenizer, device, n_perturbatio
                 max_length=256, 
                 do_sample=True, 
                 temperature=0.7,
-                top_p=0.95
+                top_p=0.95,
+                bad_words_ids=[[mask_tokenizer.pad_token_id]] # Evitar colapsos de relleno vacíos
             )
-        perturbed_text = mask_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        perturbed_texts.append(remove_mask_space(perturbed_text))
+        perturbed_text = mask_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+        
+        # Filtro de seguridad: solo agregar si la mutación tiene texto real
+        if perturbed_text and len(perturbed_text) > 5:
+            perturbed_texts.append(remove_mask_space(perturbed_text))
+            
     return perturbed_texts
 
 def get_log_likelihood(text, model, tokenizer, device):
@@ -39,10 +44,15 @@ def get_log_likelihood(text, model, tokenizer, device):
     labels = inputs.input_ids.clone()
     with torch.no_grad():
         outputs = model(input_ids=inputs.input_ids, labels=labels)
-    return -outputs.loss.item()
+    
+    loss = outputs.loss.item()
+    # Si la pérdida no es un número válido por desbordamiento de float16, la controlamos
+    if math.isnan(loss) or math.isinf(loss):
+        return None
+    return -loss
 
 def main():
-    parser = argparse.ArgumentParser(description="Detector de Código IA - Inferencia Calibrada")
+    parser = argparse.ArgumentParser(description="Detector de Código IA - Inferencia Robusta V3")
     parser.add_argument("--file", type=str, required=True, help="Ruta del archivo .py")
     parser.add_argument("--perturbations", type=int, default=15, help="Número de mutaciones")
     args = parser.parse_args()
@@ -78,28 +88,41 @@ def main():
     
     ll_original = get_log_likelihood(student_code, base_model, base_tokenizer, device)
     
-    print(f"🛸 Generando {args.perturbations} mutaciones semánticas de control...")
+    if ll_original is None:
+        print("❌ Error Crítico: El modelo base no pudo procesar la probabilidad del archivo original.")
+        sys.exit(1)
+    
+    print(f"🛸 Generando mutaciones de control para el código del estudiante...")
     perturbed_codes = perturb_code_with_t5(student_code, mask_model, mask_tokenizer, device, args.perturbations)
     
+    if not perturbed_codes:
+        print("❌ Error Crítico: El perturbador T5 falló al generar variantes válidas para este estilo de código.")
+        sys.exit(1)
+        
     ll_perturbed_sum = 0
-    for p_code in perturbed_codes:
-        ll_perturbed_sum += get_log_likelihood(p_code, base_model, base_tokenizer, device)
-    ll_perturbed_avg = ll_perturbed_sum / len(perturbed_codes)
-
-    # Cálculo de la Discrepancia
-    discrepancy = ll_original - ll_perturbed_avg
+    valid_mutations = 0
     
-    # === CALIBRACIÓN DINÁMICA MEDIANTE SIGMOIDE ===
-    # Mapea la discrepancia a una curva de probabilidad de 0 a 100%
-    # x0 = 0.05 (nuestro umbral crítico). Si la discrepancia es 0.05, dará 50% de sospecha.
-    # k = 10 (factor de crecimiento de la curva)
+    for p_code in perturbed_codes:
+        ll_val = get_log_likelihood(p_code, base_model, base_tokenizer, device)
+        if ll_val is not None:
+            ll_perturbed_sum += ll_val
+            valid_mutations += 1
+
+    if valid_mutations == 0:
+        print("❌ Error Crítico: Todas las probabilidades de las mutaciones resultaron indeterminadas (NaN).")
+        sys.exit(1)
+
+    ll_perturbed_avg = ll_perturbed_sum / valid_mutations
+
+    # Cálculo final blindado contra NaNs
+    discrepancy = ll_original - ll_perturbed_avg
     prob_ia = 1 / (1 + math.exp(-10 * (discrepancy - 0.05))) * 100
 
     print("\\n" + "="*55)
-    print("📊 REPORTE DE EVALUACIÓN ANALÍTICA (MÉTRICAS COMBINADAS)")
+    print("📊 REPORTE DE EVALUACIÓN ANALÍTICA (MÉTRICAS FILTRADAS)")
     print("="*55)
     print(f"• Log-Likelihood Código Original:     {ll_original:.4f}")
-    print(f"• Log-Likelihood Mutaciones (Prom):   {ll_perturbed_avg:.4f}")
+    print(f"• Log-Likelihood Mutaciones (Prom):   {ll_perturbed_avg:.4f} (Basado en {valid_mutations} variantes limpias)")
     print(f"• Índice de Discrepancia Absoluta:    {discrepancy:.4f}")
     print("-"*55)
     print(f"• PROBABILIDAD ESTIMADA DE SER IA:    {prob_ia:.2f}%")
