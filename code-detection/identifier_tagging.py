@@ -18,9 +18,7 @@ if not os.path.exists('build/my-languages.so'):
         [
             './tree-sitter/tree-sitter-python',
             './tree-sitter/tree-sitter-java',
-            './tree-sitter/tree-sitter-php',
             './tree-sitter/tree-sitter-go',
-            './tree-sitter/tree-sitter-ruby',
             './tree-sitter/tree-sitter-javascript',
         ]
     )
@@ -29,18 +27,14 @@ else:
 
 PYTHON_LANGUAGE = Language('build/my-languages.so', 'python')
 JAVA_LANGUAGE = Language('build/my-languages.so', 'java')
-PHP_LANGUAGE = Language('build/my-languages.so', 'php')
 GO_LANGUAGE = Language('build/my-languages.so', 'go')
-RUBY_LANGUAGE = Language('build/my-languages.so', 'ruby')
 JAVASCRIPT_LANGUAGE = Language('build/my-languages.so', 'javascript')
 
 # map from language to tree-sitter language
 LANGUAGE_MAP = {
     'java': JAVA_LANGUAGE,
     'python': PYTHON_LANGUAGE,
-    'php': PHP_LANGUAGE,
     'go': GO_LANGUAGE,
-    'ruby': RUBY_LANGUAGE,
     'javascript': JAVASCRIPT_LANGUAGE,
 }
 

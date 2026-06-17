@@ -15,9 +15,9 @@ def load_base_model_and_tokenizer(args, model_config):
         base_model_kwargs.update(dict(revision='float16'))
 
     if '13b' in name:
-        base_model = transformers.AutoModelForCausalLM.from_pretrained(name, **base_model_kwargs, cache_dir=model_config['cache_dir'], device_map="auto")
+        base_model = transformers.AutoModelForCausalLM.from_pretrained(name, **base_model_kwargs, local_files_only=False, device_map="auto")
     elif 'codet5p' in name:
-        base_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(name, cache_dir=model_config['cache_dir'], device_map="auto", torch_dtype=torch.float16,
+        base_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(name, local_files_only=False, device_map="auto", torch_dtype=torch.float16,
                                                                         trust_remote_code=True, decoder_start_token_id=50256, pad_token_id=50256)
     elif '20b' in name:
         config = transformers.AutoConfig.from_pretrained("EleutherAI/gpt-neox-20b")
@@ -27,10 +27,10 @@ def load_base_model_and_tokenizer(args, model_config):
             base_model,  model_config['cache_dir'], device_map="auto", no_split_module_classes=["GPTNeoXLayer"]
         )
     elif "llama" in name.lower():
-        base_model = transformers.AutoModelForCausalLM.from_pretrained(name, **base_model_kwargs, cache_dir=model_config['cache_dir'], trust_remote_code=True, torch_dtype=torch.float16)
+        base_model = transformers.AutoModelForCausalLM.from_pretrained(name, **base_model_kwargs, local_files_only=False, trust_remote_code=True, torch_dtype=torch.float16)
         base_model.to(args.DEVICE)
     else:
-        base_model = transformers.AutoModelForCausalLM.from_pretrained(name, **base_model_kwargs, cache_dir=model_config['cache_dir'], trust_remote_code=True)
+        base_model = transformers.AutoModelForCausalLM.from_pretrained(name, **base_model_kwargs, local_files_only=False, trust_remote_code=True)
         base_model.to(args.DEVICE)
 
     optional_tok_kwargs = {}
@@ -40,9 +40,9 @@ def load_base_model_and_tokenizer(args, model_config):
     if args.dataset in ['pubmed']:
         optional_tok_kwargs['padding_side'] = 'left'
     if 'llama' in name.lower():
-        base_tokenizer = transformers.LlamaTokenizer.from_pretrained(name, **optional_tok_kwargs, cache_dir=model_config['cache_dir'])
+        base_tokenizer = transformers.LlamaTokenizer.from_pretrained(name, **optional_tok_kwargs, local_files_only=False)
     else:
-        base_tokenizer = transformers.AutoTokenizer.from_pretrained(name, **optional_tok_kwargs, cache_dir=model_config['cache_dir'])
+        base_tokenizer = transformers.AutoTokenizer.from_pretrained(name, **optional_tok_kwargs, local_files_only=False)
     base_tokenizer.pad_token_id = base_tokenizer.eos_token_id
     model_config['base_model'] = base_model
     model_config['base_tokenizer'] = base_tokenizer
@@ -53,9 +53,9 @@ def load_mask_filling_model(args, mask_filling_model_name, model_config):
 
     print(f'Loading mask filling model {mask_filling_model_name}...')
     if 'incoder' in mask_filling_model_name:
-        mask_model = transformers.AutoModelForCausalLM.from_pretrained(mask_filling_model_name, cache_dir=model_config['cache_dir'])
+        mask_model = transformers.AutoModelForCausalLM.from_pretrained(mask_filling_model_name, local_files_only=False)
     else:
-        mask_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(mask_filling_model_name, cache_dir=model_config['cache_dir'])
+        mask_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(mask_filling_model_name, local_files_only=False)
     # mask_model.parallelize()
     # to device
     mask_model.to(args.DEVICE)
@@ -65,8 +65,8 @@ def load_mask_filling_model(args, mask_filling_model_name, model_config):
     except AttributeError:
         n_positions = 512
 
-    # preproc_tokenizer = transformers.AutoTokenizer.from_pretrained('t5-small', model_max_length=512, cache_dir=model_config['cache_dir'])
-    mask_tokenizer = transformers.AutoTokenizer.from_pretrained(mask_filling_model_name, model_max_length=n_positions, cache_dir=model_config['cache_dir'])
+    # preproc_tokenizer = transformers.AutoTokenizer.from_pretrained('t5-small', model_max_length=512, local_files_only=False)
+    mask_tokenizer = transformers.AutoTokenizer.from_pretrained(mask_filling_model_name, model_max_length=n_positions, local_files_only=False)
     if 'incoder' in mask_filling_model_name:
         mask_tokenizer.pad_token = "<pad>"
         mask_tokenizer.paddding_side = "left"

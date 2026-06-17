@@ -1,26 +1,9 @@
-# Core deep learning and AI libraries
-torch
-transformers
-accelerate
-datasets
-openai
-
-# Scientific computing
-numpy
-scipy
-scikit-learn
-
-# Data processing and analysis
-pandas
-matplotlib
-seaborn
-
-# Progress bars and logging
-tqdm
+transformers==4.36.2
+huggingface_hub==0.20.3
+accelerate==0.26.1
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2
+hf_transfer==0.1.9
 loguru
-
-# Code parsing
-tree-sitter
-
-# Web requests (for API calls)
-requests
+tqdm
+pandas
