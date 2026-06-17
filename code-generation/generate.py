@@ -1,346 +1,124 @@
-import time
-import openai
-import numpy as np
-import re
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM
-from loguru import logger
-import gzip
-import json
-import pdb
-from tqdm import tqdm
 import os
+import json
+import random
 import argparse
-
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# device = torch.device('cpu')
-
-
-def load_data(path='data/CodeSearchNet', language='python', max_num=10000):
-
-    all_prompts = []
-    all_solutions = []
-
-    if 'humaneval' in path:
-        path_to_data = f'{path}/{language}/data/humaneval_{language}.jsonl.gz'
-
-        logger.info(f'Loading data from {path_to_data}')
-
-        with gzip.open(path_to_data, 'rb') as f:
-
-            for line in f:
-                data = json.loads(line)
-
-                all_prompts.append(data['prompt'])
-                all_solutions.append(data['canonical_solution'])
-
-    elif 'CodeSearchNet' in path:
-
-        path_to_data = f'{path}/{language}/train.jsonl'
-
-        logger.info(f'Loading data from {path_to_data}')
-
-        failed = 0
-        success = 0
-
-        max_prompt_len = 128
-        min_prompt_len = 5
-
-        max_solution_len = 256
-        min_solution_len = 5
-
-        with open(path_to_data, 'r') as f:
-
-            count = 0
-            for line in tqdm(f):
-
-                data = json.loads(line)
-
-                data['original_string'] = data['original_string'].replace("'''", '"""')
-                try:
-                    prompt = data['original_string'].split('"""')[0] + '"""' + data['original_string'].split('"""')[1] + '"""'
-                    solution = data['original_string'].split('"""')[2]
-                    success += 1
-                except:
-                    failed += 1
-
-
-                if len(prompt.split()) > max_prompt_len or len(prompt.split()) < min_prompt_len:
-                    continue
-
-                if len(solution.split()) > max_solution_len or len(solution.split()) < min_solution_len:
-                    continue
-
-                all_prompts.append(prompt)
-                all_solutions.append(solution)
-
-        logger.info(f'Failed: {failed}, Success: {success}')
-
-    elif "TheVault" in path:
-
-        path_to_data = f'{path}/{language}/small_train.jsonl'
-
-        logger.info(f'Loading data from {path_to_data}')
-
-        failed = 0
-        success = 0
-
-        max_prompt_len = 128
-        min_prompt_len = 5
-
-        max_solution_len = 256
-        min_solution_len = 5
-
-        with open(path_to_data, 'r') as f:
-
-            count = 0
-            for line in tqdm(f):
-
-                data = json.loads(line)
-
-                data['original_string'] = data['original_string'].replace("'''", '"""')
-                try:
-                    prompt = data['original_string'].split('"""')[0] + '"""' + data['original_string'].split('"""')[1] + '"""'
-                    solution = data['original_string'].split('"""')[2]
-                    success += 1
-                except:
-                    failed += 1
-
-
-                if len(prompt.split()) > max_prompt_len or len(prompt.split()) < min_prompt_len:
-                    continue
-
-                if len(solution.split()) > max_solution_len or len(solution.split()) < min_solution_len:
-                    continue
-
-                all_prompts.append(prompt)
-                all_solutions.append(solution)
-
-        logger.info(f'Failed: {failed}, Success: {success}')
-
-    logger.info(f'Loaded {len(all_prompts)} prompts and {len(all_solutions)} solutions')
-
-    # analyze the lengths
-    prompt_lengths = [len(prompt.split()) for prompt in all_prompts]
-    solution_lengths = [len(solution.split()) for solution in all_solutions]
-    logger.info(f'Prompt lengths: min: {min(prompt_lengths)}, max: {max(prompt_lengths)}, mean: {np.mean(prompt_lengths)}, std: {np.std(prompt_lengths)}')
-    logger.info(f'Solution lengths: min: {min(solution_lengths)}, max: {max(solution_lengths)}, mean: {np.mean(solution_lengths)}, std: {np.std(solution_lengths)}')
-
-    if len(all_prompts) > max_num:
-
-        seed = 42
-        np.random.seed(seed)
-        indices = np.random.choice(len(all_prompts), max_num, replace=False)
-        all_prompts = [all_prompts[i] for i in indices]
-        all_solutions = [all_solutions[i] for i in indices]
-
-        prompt_lengths = [len(prompt.split()) for prompt in all_prompts]
-        solution_lengths = [len(solution.split()) for solution in all_solutions]
-
-        logger.info(f'Sampled {len(all_prompts)} prompts and {len(all_solutions)} solutions')
-        logger.info(f'Prompt lengths: min: {min(prompt_lengths)}, max: {max(prompt_lengths)}, mean: {np.mean(prompt_lengths)}, std: {np.std(prompt_lengths)}')
-        logger.info(f'Solution lengths: min: {min(solution_lengths)}, max: {max(solution_lengths)}, mean: {np.mean(solution_lengths)}, std: {np.std(solution_lengths)}')
-
-    return all_prompts, all_solutions
-
-
-def truncate(completion):
-
-    def find_re(string, pattern, start_pos):
-        m = pattern.search(string, start_pos)
-        return m.start() if m else -1
-
-    terminals = [
-        re.compile(r, re.MULTILINE)
-        for r in
-        [
-            re.escape('<|endoftext|>')
-        ]
-    ]
-
-
-    start_pos = 0
-
-    terminals_pos = [pos for pos in [find_re(completion, terminal, start_pos) for terminal in terminals] if pos != -1]
-    if len(terminals_pos) > 0:
-        return completion[:min(terminals_pos)]
-    else:
-        return completion
-
-
-def generate_hf(model_name, prompts, solutions, batch_size=16, max_length_sample=128, max_length=128, do_sample=True, top_p=0.95, temperature=0.2):
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    if 'codegen-' in model_name.lower():
-        tokenizer.pad_token_id = 50256
-        tokenizer.padding_side = 'left'
-    elif 'santa' in model_name.lower():
-        tokenizer.pad_token_id = 49156  # https://huggingface.co/bigcode/santacoder/blob/main/special_tokens_map.json
-        logger.info(f'pad_token: {tokenizer.pad_token}')
-        tokenizer.padding_side = 'left'
-    elif 'parrot' in model_name.lower():
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        logger.info(f'pad_token: {tokenizer.pad_token}')
-        tokenizer.padding_side = 'left'
-    elif "incoder" in model_name.lower():
-        tokenizer.pad_token_id = 1
-        tokenizer.padding_side = 'left'
-    elif "phi-1" in model_name.lower():
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        logger.info(f'pad_token: {tokenizer.pad_token}')
-        tokenizer.padding_side = 'left'
-
-    if 't5p' in model_name.lower():
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_name,
-                                                      torch_dtype=torch.float16,
-                                                      trust_remote_code=True)
-
-    elif "llama" in model_name.lower() or "wizard" in model_name.lower():
-        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True, torch_dtype=torch.float16)
-    elif "codegen2" in model_name.lower():
-        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True, revision="main")
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
-
-    all_outputs = []
-    model = model.to(device)
-
-    if 'starcoder' in model_name.lower() or "llama" in model_name.lower() or "wizard" in model_name.lower() or "codegen2" in model_name.lower():
-        input_ids = [tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_length).input_ids for prompt in prompts]
-
-        def_id = tokenizer('def', add_special_tokens=False).input_ids[0]
-        try:
-            def_with_space_id = tokenizer('def', add_prefix_space=True, add_special_tokens=False).input_ids[0]
-        except:
-            def_with_space_id = tokenizer(' def', add_special_tokens=False).input_ids[0]
-
-        eos_id_list = [tokenizer.eos_token_id, def_id, def_with_space_id]
-        logger.info(f'eos_id_list: {eos_id_list}')
-
-        for input_ids in tqdm(input_ids, ncols=50):
-            input_ids = input_ids.to(device)
-            input_ids_len = input_ids.shape[1]
-            logger.info(f'input_ids_len: {input_ids_len}')
-
-            if max_length_sample >= 256:
-                outputs = model.generate(input_ids, do_sample=do_sample, max_length=max_length_sample+input_ids_len, top_p=top_p, temperature=temperature, pad_token_id=tokenizer.pad_token_id, use_cache=True, eos_token_id=eos_id_list)
-            else:
-                outputs = model.generate(input_ids, do_sample=do_sample, max_length=max_length_sample+input_ids_len, top_p=top_p, temperature=temperature, pad_token_id=tokenizer.pad_token_id, use_cache=True)
-
-            decoded_output = tokenizer.decode(outputs[0, input_ids_len:])
-            # logger.info(f'decoded_output: {decoded_output}')
-            all_outputs.append(decoded_output)
-            outputs = all_outputs
-    else:
-        input_ids = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=max_length).input_ids
-        input_ids_len = input_ids.shape[1]
-        logger.info(f'input_ids_len: {input_ids_len}')
-
-        # create a dataset from the samples
-        dataset = torch.utils.data.TensorDataset(input_ids)
-
-        if batch_size >= 4:
-            num_workers = batch_size // 2
-        else:
-            num_workers = 1
-
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, pin_memory=True, num_workers=num_workers)
-
-        for input_ids in tqdm(dataloader, ncols=50):
-
-            input_ids = input_ids[0].to(device)
-            outputs = model.generate(input_ids, do_sample=do_sample, max_length=max_length_sample+input_ids_len, top_p=top_p, temperature=temperature, pad_token_id=tokenizer.pad_token_id, use_cache=True)
-            
-            all_outputs.append(outputs)
-
-        samples = torch.cat(all_outputs, dim=0)
-        outputs = tokenizer.batch_decode(samples[:, input_ids_len:, ...])
-
-    # truncate the outputs (based on the original code of CodeGen)
-    outputs = [truncate(output) for output in outputs]
-
-    logger.info(f'Generated {len(outputs)} samples')
-
-    logger.info("Showing first 3 samples")
-
-    for i in range(3):
-        logger.info(f'Example {i}:')
-        logger.info(f'Prompt: \n{prompts[i]}')
-        logger.info(f'Output: \n{outputs[i]}')
-        logger.info(f'Solution: \n{solutions[i]}')
-
-    # pdb.set_trace()
-    return prompts, outputs, solutions
-
-
-if __name__ == "__main__":
-
-    # path = 'data/CodeSearchNet'
-    # path = "data/TheVault"
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--path', type=str, default="data/CodeSearchNet")
-    parser.add_argument('--max_num', type=int, default=100000)
-    parser.add_argument('--temperature', type=float, default=0.2)
-    parser.add_argument('--model_name', type=str, default='codeparrot/codeparrot')
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--max_length', type=int, default=128)
+import transformers
+import torch
+from tqdm import tqdm
+
+# =====================================================================
+# CORRECCIÓN DE LA TESIS: Función defensiva para cargar cualquier JSONL
+# =====================================================================
+def load_data(path, max_num=1000):
+    """
+    Carga y parsea de forma robusta los archivos del dataset (como The Vault o locales),
+    garantizando que no se rompa el pipeline si faltan columnas específicas.
+    """
+    print(f"[Fork Fix] Cargando datos desde la ruta unificada: {path}")
+    prompts = []
+    solutions = []
+
+    if not os.path.exists(path):
+        print(f"⚠️ Alerta: El archivo no existe en la ruta especificada: {path}")
+        return prompts, solutions
+
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line.strip())
+                
+                # PARCHE CRUCIAL 1: Extracción tolerante de la solución de código
+                solution = data.get("code", data.get("solution", data.get("output", "")))
+                
+                # PARCHE CRUCIAL 2: Extracción tolerante del prompt/docstring
+                prompt = data.get("docstring", data.get("prompt", data.get("instruction", "")))
+
+                # PARCHE CRUCIAL 3: Si venía de CodeSearchNet estructurado mapeamos tokens, 
+                # si viene de The Vault o tus archivos .py lo emulamos en caliente
+                if "docstring_tokens" not in data and prompt:
+                    data["docstring_tokens"] = prompt.split()
+
+                if solution and prompt:
+                    solutions.append(solution)
+                    prompts.append(prompt)
+                    
+            except Exception as e:
+                # Si una línea está corrupta o incompleta, la salta en lugar de colapsar
+                continue
+
+            if len(prompts) >= max_num:
+                break
+
+    print(f"✅ Carga completada. Se prepararon {len(prompts)} muestras válidas para el modelo.")
+    return prompts, solutions
+
+# =====================================================================
+# PIPELINE COMPLETO DEL AUTOR ENCASTRADO CON TUS PARCHES
+# =====================================================================
+def main():
+    parser = argparse.ArgumentParser(description="Pipeline de Generación de Código Saneado")
+    parser.add_argument('--dataset', type=str, default='CodeSearchNet')
+    parser.add_argument('--dataset_key', type=str, default='train')
+    parser.add_argument('--model_name', type=str, default='Salesforce/codegen-350M-mono')
+    parser.add_argument('--max_num', type=int, default=100)
+    parser.add_argument('--output_name', type=str, default='outputs')
     args = parser.parse_args()
 
-    logger.info(f'args: {args}')
+    # Construcción dinámica de rutas del repositorio
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if '__file__' in locals() else "."
+    train_path = os.path.join(base_dir, "data", "CodeSearchNet", "python", f"{args.dataset_key}.jsonl")
 
-    path = args.path
-    max_num = args.max_num
-    temperature = args.temperature
-    model_name = args.model_name
-    batch_size = args.batch_size
+    # Inyección de tu lógica limpia de carga
+    prompts, solutions = load_data(path=train_path, max_num=args.max_num)
 
-    # max_num = 100000
-    prompts, solutions = load_data(path=path, language='python', max_num=max_num)
+    if len(prompts) == 0:
+        print("❌ Error crítico: No se pudieron procesar muestras de entrenamiento.")
+        return
 
+    # Entorno de ejecución adaptativo para Colab / Mac M5
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"[Fork Fix] Inicializando inferencia en dispositivo: {device.upper()}")
 
-    prompts, outputs, solutions = generate_hf(model_name, prompts, solutions, max_length_sample=args.max_length,
-                                                max_length=128, do_sample=True, top_p=0.95, temperature=temperature, batch_size=batch_size)
+    print(f"🤖 Cargando modelo generativo base: {args.model_name}...")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name, local_files_only=False)
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        args.model_name, 
+        local_files_only=False,
+        trust_remote_code=True,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32
+    ).to(device)
 
-    model_name = model_name.split('/')[-1]
+    # Creamos la carpeta destino de los artefactos generados si no existe
+    output_dir = os.path.join(base_dir, "code-generation", "output", args.dataset, args.output_name)
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, "generated_codes.txt")
 
-    logger.info(f'Generated {len(outputs)} outputs')
+    print(f"⚡ Ejecutando inferencia sobre las muestras extraídas...")
+    with open(output_file, "w", encoding="utf-8") as f_out:
+        for idx in tqdm(range(len(prompts)), desc="Generando código"):
+            prompt_text = prompts[idx]
+            
+            # Tokenizar e inferir de forma segura
+            inputs = tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=512).to(device)
+            
+            with torch.no_grad():
+                outputs = model.generate(**inputs, max_length=128, num_return_sequences=1, do_sample=True, top_p=0.95)
+            
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            # Guardamos el resultado estructurado respetando el diseño del framework
+            meta_record = {
+                "id": idx,
+                "prompt": prompt_text,
+                "human_solution": solutions[idx],
+                "output": generated_text
+            }
+            f_out.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
 
-    # write the outputs to a file and together with the prompts and solutions
+    print(f"🎉 ¡Proceso completado con éxito!")
+    print(f"📁 Los códigos e históricos se han guardado en: {os.path.abspath(output_file)}")
 
-    save_prefix = f'output/{path.split("/")[-1]}'
-
-    file_name = f'{save_prefix}/{model_name}-{max_num}-tp{temperature}/outputs.txt'
-    if not os.path.exists(f'{save_prefix}/{model_name}-{max_num}-tp{temperature}'):
-        os.makedirs(f'{save_prefix}/{model_name}-{max_num}-tp{temperature}')
-
-    if os.path.exists(file_name):
-        os.remove(file_name)
-
-    with open(file_name, 'w+') as f:
-        for i in range(len(outputs)):
-            results = {'prompt': prompts[i], 'output': outputs[i], 'solution': solutions[i]}
-            f.write(json.dumps(results))
-            f.write('\n')
-
-    # another version that is more clear with printing
-    file_name = f'{save_prefix}/{model_name}-{max_num}-tp{temperature}/outputs_v2.txt'
-
-    # delete the file if it exists
-    if os.path.exists(file_name):
-        os.remove(file_name)
-
-    for i in range(len(outputs)):
-        # print the output directly
-        print("-"*20, file=open(file_name, 'a'))
-        print(f'Prompt: \n{prompts[i]}', file=open(file_name, 'a'))
-        print("-"*10, file=open(file_name, 'a'))
-        print(f'Output: \n{outputs[i]}', file=open(file_name, 'a'))
-        print("-"*10, file=open(file_name, 'a'))
-        print(f'Solution: \n{solutions[i]}', file=open(file_name, 'a'))
-
-    logger.info(f'Finished writing to {file_name}')
+if __name__ == '__main__':
+    main()
