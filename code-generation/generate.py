@@ -2,74 +2,67 @@ import os
 import json
 import logging
 import argparse
-from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def load_data(path, max_num=1000):
-    print(f"[Fork] Cargando datos desde: {path}")
-    prompts = []
-    solutions = []
+def load_and_convert_data(input_path, output_path, max_num=200):
+    print(f"[Fork Fix] Leyendo datos desde: {input_path}")
+    print(f"[Fork Fix] Escribiendo formato nativo en: {output_path}")
+    
+    if not os.path.exists(input_path):
+        logger.error(f"❌ El archivo de entrada no existe: {input_path}")
+        return
 
-    if not os.path.exists(path):
-        logger.error(f"El archivo no existe: {path}")
-        return prompts, solutions
+    # Crear los directorios de salida si no existen
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    count = 0
 
-    with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
+    with open(input_path, 'r', encoding='utf-8') as f_in, open(output_path, 'w', encoding='utf-8') as f_out:
+        for line in f_in:
+            if not line.strip():
+                continue
             try:
                 data = json.loads(line.strip())
-                solution = data.get("code") or data.get("solution") or data.get("output", "")
-                prompt = data.get("docstring") or data.get("prompt") or data.get("instruction", "")
-
-                if solution and prompt:
-                    solutions.append(solution)
-                    prompts.append(prompt)
+                
+                # Extraemos el código de forma tolerante (The Vault usa 'code')
+                raw_code = data.get("code") or data.get("solution") or data.get("output", "")
+                
+                if not raw_code.strip():
+                    continue  # Si no hay código, nos lo saltamos
+                
+                # CONTRATO ESTRICTO: Creamos la línea exactamente como la exige el main.py original
+                structured_line = {
+                    "solution": raw_code,  # <--- Evita el KeyError: 'solution'
+                    "output": raw_code     # <--- Evita el KeyError: 'output'
+                }
+                
+                # Escribimos como una línea JSONL independiente
+                f_out.write(json.dumps(structured_line, ensure_ascii=False) + '\n')
+                count += 1
+                
             except Exception:
                 continue
 
-            if len(prompts) >= max_num:
+            if count >= max_num:
                 break
 
-    logger.info(f"Se cargaron exitosamente {len(prompts)} registros.")
-    return prompts, solutions
+    logger.info(f"🎉 ¡Éxito! Se generaron {count} registros perfectamente estructurados en formato JSONL.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--max_num', type=int, default=200)
+    parser.add_argument('--max_num', type=int, default=100)
     args = parser.parse_args()
 
-    # 1. Encontrar rutas absolutas dinámicas para no perderse en Colab
+    # Rutas absolutas para no perderse en Colab
     script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
     repo_root = os.path.dirname(script_dir)
     
-    train_path = os.path.join(repo_root, 'data', 'CodeSearchNet', 'python', 'train.jsonl')
+    # Origen: El archivo que creaste con tu script de streaming
+    input_file = os.path.join(repo_root, 'data', 'CodeSearchNet', 'python', 'train.jsonl')
+    
+    # Destino: La ruta exacta y fija (hardcoded) donde el main.py original irá a buscar los datos
+    output_file = os.path.join(repo_root, 'code-generation', 'output', 'TheVault', 'CodeLlama-7b-hf-10000-tp0.2', 'outputs.txt')
 
-    # 2. Cargar las muestras a memoria
-    prompts, solutions = load_data(path=train_path, max_num=args.max_num)
-
-    if len(prompts) == 0:
-        print("❌ Alerta: No se pudieron extraer muestras válidas.")
-    else:
-        print(f"¡Pipeline de datos listo! Muestras preparadas: {len(prompts)}")
-        
-        # =====================================================================
-        # AQUÍ ESTÁ LO QUE FALTA: Crear y volcar el archivo que busca main.py
-        # =====================================================================
-        archivo_salida_autor = {
-            "original": solutions,         # Códigos humanos
-            "sampled": solutions,          # Copia espejo simulación base
-            "prompts": prompts             # Docstrings
-        }
-        
-        # Construimos la ruta exacta que el detector buscará de forma rígida
-        output_dir = os.path.join(repo_root, "code-generation", "output", "TheVault", "CodeLlama-7b-hf-10000-tp0.2")
-        os.makedirs(output_dir, exist_ok=True)
-        ruta_final_txt = os.path.join(output_dir, "outputs.txt")
-        
-        # Escribimos físicamente el archivo en el disco
-        with open(ruta_final_txt, "w", encoding="utf-8") as f_out:
-            f_out.write(json.dumps(archivo_salida_autor, ensure_ascii=False))
-            
-        print(f"📁 [CREADO] Archivo de simulación guardado con éxito en: {ruta_final_txt}")
+    # Ejecutar la conversión física en disco
+    load_and_convert_data(input_file, output_file, max_num=args.max_num)
