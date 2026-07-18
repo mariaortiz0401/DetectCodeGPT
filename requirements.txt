@@ -1,12 +1,23 @@
+# Ecosistema compatible con Maxwell (Compute 5.2) y CUDA 11.8
+--index-url https://download.pytorch.org/whl/cu118
+torch==2.1.2
+torchvision==0.16.2
+torchaudio==2.1.2
+
+# Infraestructura Hugging Face compatible con PyTorch 2.1
 transformers==4.36.2
-huggingface-hub==0.23.0
-datasets==2.19.0
-accelerate==0.26.1
-tree-sitter==0.21.3
+huggingface-hub==0.20.3
+datasets==2.16.1
+accelerate==0.25.0
+
+# Procesamiento de Código (Retrocompatible con DetectCodeGPT)
+tree-sitter==0.20.4
 tree-sitter-languages==1.10.2
-loguru
-tqdm
+
+# Ciencia de Datos, Logs y Métricas
 pandas
 numpy
 matplotlib
 seaborn
+loguru
+tqdm
